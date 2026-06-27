@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Air Drawing App Pro - Magic Wand Edition</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0b0b0f;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        h1 {
+            position: absolute;
+            top: 10px;
+            margin: 0;
+            font-size: 1.2rem;
+            letter-spacing: 2px;
+            color: rgba(255, 255, 255, 0.6);
+            z-index: 10;
+        }
+
+        #app-container {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 0 40px rgba(0, 225, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Mirror the video and canvas for intuitive drawing */
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 800px;
+            height: 600px;
+            transform: scaleX(-1);
+        }
+
+        video {
+            opacity: 0.12; 
+            object-fit: cover;
+            background-color: #050508;
+        }
+
+        canvas {
+            z-index: 2;
+            background: transparent;
+        }
+
+        /* Manual Controls Overlay */
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: rgba(15, 15, 25, 0.85);
+            backdrop-filter: blur(12px);
+            padding: 10px 24px;
+            border-radius: 50px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #8a8a9e;
+        }
+
+        input[type="range"] {
+            accent-color: #00ffca;
+            cursor: pointer;
+        }
+
+        /* Status HUD */
+        #hud {
+            position: absolute;
+            top: 25px;
+            left: 25px;
+            z-index: 10;
+            background: rgba(10, 10, 15, 0.85);
+            padding: 10px 18px;
+            border-radius: 30px;
+            font-weight: bold;
+            font-size: 13px;
+            letter-spacing: 1.5px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+        }
+
+        .status-draw { color: #00ffca; text-shadow: 0 0 10px rgba(0,255,202,0.5); }
+        .status-erase { color: #ff0055; text-shadow: 0 0 10px rgba(255,0,85,0.5); }
+        .status-pause { color: #ffcc00; text-shadow: 0 0 10px rgba(255,204,0,0.5); }
+        
+        #clear-btn {
+            background: rgba(255, 0, 85, 0.2);
+            border: 1px solid #ff0055;
+            color: #ff3377;
+            padding: 6px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        #clear-btn:hover {
+            background: #ff0055;
+            color: white;
+            box-shadow: 0 0 15px rgba(255, 0, 85, 0.6);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>NEON AIR PAINT: MAGIC WAND</h1>
+
+    <div id="app-container">
+        <div id="hud" class="status-pause">STATUS: INITIALIZING</div>
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="paintCanvas" width="800" height="600"></canvas>
+    </div>
+
+    <div id="controls">
+        <div class="control-group">
+            <label for="brushSize">Size</label>
+            <input type="range" id="brushSize" min="4" max="40" value="12">
+        </div>
+        <div class="control-group">
+            <label for="decaySpeed">Decay (Fade)</label>
+            <input type="range" id="decaySpeed" min="0" max="100" value="15">
+        </div>
+        <button id="clear-btn">Clear All</button>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('paintCanvas');
+        const ctx = canvasElement.getContext('2d');
+        const hud = document.getElementById('hud');
+        const brushSizeInput = document.getElementById('brushSize');
+        const decaySpeedInput = document.getElementById('decaySpeed');
+        const clearBtn = document.getElementById('clear-btn');
+
+        let lastX = null;
+        let lastY = null;
+        let currentMode = 'PAUSE'; 
+        let activeColor = '#00ffca'; // Default neon cyan
+
+        // Air UI Buttons Configuration (X, Y coordinates are inverted logically due to transform: scaleX(-1) on canvas)
+        // However, MediaPipe gives standard coordinates, so we map them relative to the mirrored projection.
+        const airButtons = [
+            { name: 'Cyan', color: '#00ffca', x: 50, y: 25, w: 60, h: 40 },
+            { name: 'Magenta', color: '#ff007f', x: 130, y: 25, w: 60, h: 40 },
+            { name: 'Yellow', color: '#ffea00', x: 210, y: 25, w: 60, h: 40 },
+            { name: 'Purple', color: '#9d00ff', x: 290, y: 25, w: 60, h: 40 }
+        ];
+
+        // Clear canvas
+        clearBtn.addEventListener('click', () => {
+            ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        });
+
+        // 1. DYNAMIC TRAIL DECAY LOOP (Runs continuously to fade lines out)
+        function applyDecay() {
+            const decayValue = parseInt(decaySpeedInput.value) / 1000;
+            if (decayValue > 0) {
+                // Save context, change composition to fade existing pixels, then restore
+                ctx.globalCompositeOperation = 'destination-out';
+                ctx.fillStyle = `rgba(0, 0, 0, ${decayValue})`;
+                ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+                ctx.globalCompositeOperation = 'source-over';
+            }
+            
+            // Re-render the Virtual Air UI Palette onto the canvas
+            drawAirUI();
+
+            requestAnimationFrame(applyDecay);
+        }
+
+        // Draw the interactive virtual UI buttons on screen
+        function drawAirUI() {
+            airButtons.forEach(btn => {
+                ctx.save();
+                // Draw glow around air buttons
+                ctx.shadowColor = btn.color;
+                ctx.shadowBlur = activeColor === btn.color ? 15 : 4;
+                
+                ctx.fillStyle = btn.color;
+                ctx.globalAlpha = activeColor === btn.color ? 0.9 : 0.4;
+                
+                // Draw rounded rect variant
+                ctx.beginPath();
+                ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 8);
+                ctx.fill();
+                
+                // Stroke active selection outline
+                if (activeColor === btn.color) {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                ctx.restore();
+            });
+        }
+
+        // Check if index tip is hitting any dynamic virtual button
+        function checkAirUIHit(x, y) {
+            // Because our canvas element is flipped via CSS scaleX(-1), but our context drawing coordinates 
+            // mirror with it, we must match MediaPipe's coordinates (which we inverted for context mapping).
+            airButtons.forEach(btn => {
+                if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
+                    activeColor = btn.color;
+                }
+            });
+        }
+
+        function onResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                updateHUD('PAUSE');
+                lastX = null;
+                lastY = null;
+                return;
+            }
+
+            const landmarks = results.multiHandLandmarks[0];
+            
+            const indexTip = landmarks[8];
+            const indexPip = landmarks[6];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            // Map MediaPipe normalized 0-1 coords to Canvas Space. 
+            // Crucial: invert X axis layout to account for the CSS scaleX(-1) mirror effect.
+            const x = (1 - indexTip.x) * canvasElement.width;
+            const y = indexTip.y * canvasElement.height;
+
+            // --- GESTURE DETECTION LOGIC ---
+            const isIndexExtended = indexTip.y < indexPip.y; 
+            const isMiddleExtended = middleTip.y < landmarks[10].y;
+            const isRingExtended = ringTip.y < landmarks[14].y;
+            const isPinkyExtended = pinkyTip.y < landmarks[18].y;
+
+            const extendedFingersCount = [isIndexExtended, isMiddleExtended, isRingExtended, isPinkyExtended].filter(Boolean).length;
+
+            if (extendedFingersCount >= 3) {
+                currentMode = 'ERASE';
+            } else if (isIndexExtended && !isMiddleExtended && !isRingExtended) {
+                currentMode = 'DRAW';
+                // Check if user is hovering over top-row Air UI color options
+                checkAirUIHit(x, y);
+            } else if (extendedFingersCount === 0) {
+                currentMode = 'PAUSE';
+            }
+
+            updateHUD(currentMode);
+
+            // --- DRAWING LOGIC ---
+            if (currentMode === 'DRAW') {
+                ctx.save();
+                ctx.beginPath();
+                ctx.strokeStyle = activeColor;
+                ctx.lineWidth = brushSizeInput.value;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                ctx.shadowColor = activeColor;
+                ctx.shadowBlur = parseInt(brushSizeInput.value) * 1.6;
+
+                if (lastX !== null && lastY !== null) {
+                    ctx.moveTo(lastX, lastY);
+                    ctx.lineTo(x, y);
+                    ctx.stroke();
+                }
+                ctx.restore();
+                
+                lastX = x;
+                lastY = y;
+            } else if (currentMode === 'ERASE') {
+                ctx.save();
+                ctx.globalCompositeOperation = 'destination-out';
+                ctx.beginPath();
+                ctx.arc(x, y, brushSizeInput.value * 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+                
+                lastX = null;
+                lastY = null;
+            } else {
+                lastX = null;
+                lastY = null;
+            }
+        }
+
+        function updateHUD(mode) {
+            hud.textContent = `STATUS: ${mode}`;
+            hud.className = ''; 
+            hud.classList.add(`status-${mode.toLowerCase()}`);
+        }
+
+        // Initialize MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults(onResults);
+
+        // Start Camera stream
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 800,
+            height: 600
+        });
+        
+        camera.start().then(() => {
+            updateHUD('PAUSE');
+            applyDecay(); // Start the fade loop once camera is alive
+        });
+    </script>
+</body>
+</html>
