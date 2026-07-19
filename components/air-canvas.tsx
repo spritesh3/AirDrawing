@@ -33,6 +33,14 @@ export function AirCanvas() {
   const [canUndo, setCanUndo] = useState(false)
   const [showVideo, setShowVideo] = useState(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [retryToken, setRetryToken] = useState(0)
+
+  const handleRetry = useCallback(() => {
+    setErrorMessage(null)
+    statusRef.current = "loading"
+    setStatus("loading")
+    setRetryToken((t) => t + 1)
+  }, [])
 
   // Keep the hot loop in sync with UI state without re-creating the loop
   useEffect(() => {
@@ -102,8 +110,8 @@ export function AirCanvas() {
           updateStatus("error")
           setErrorMessage(
             err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")
-              ? "Camera access was denied. Allow camera permissions and reload the page."
-              : "Could not start the camera or hand tracking. Check that a webcam is connected and reload."
+              ? "Camera access was denied. Click the camera icon in your browser's address bar (or check site permissions), allow the camera, then press Try again."
+              : "Could not start the camera or hand tracking. Check that a webcam is connected and not in use by another app, then press Try again."
           )
         }
       }
@@ -211,7 +219,7 @@ export function AirCanvas() {
       stream?.getTracks().forEach((t) => t.stop())
       landmarker?.close()
     }
-  }, [repaint, updateStatus])
+  }, [repaint, updateStatus, retryToken])
 
   // Keep canvases sized to the viewport
   useEffect(() => {
@@ -294,9 +302,18 @@ export function AirCanvas() {
       {/* Error state */}
       {errorMessage && (
         <div className="absolute inset-0 flex items-center justify-center p-6">
-          <div className="max-w-md rounded-2xl border border-border bg-surface p-6 text-center">
-            <p className="mb-2 font-semibold text-danger">Camera unavailable</p>
-            <p className="text-sm leading-relaxed text-muted text-pretty">{errorMessage}</p>
+          <div className="flex max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-surface p-6 text-center">
+            <div>
+              <p className="mb-2 font-semibold text-danger">Camera unavailable</p>
+              <p className="text-sm leading-relaxed text-muted text-pretty">{errorMessage}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition-opacity hover:opacity-90"
+            >
+              Try again
+            </button>
           </div>
         </div>
       )}
